@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marble Run: Persistence Edition</title>
+    <style>
+        :root { --bg: #0b0e14; --panel: #1c2128; --accent: #e94560; --text: #adbac7; }
+        body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        
+        #setup-screen { position: absolute; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 200; overflow-y: auto; padding: 20px; }
+        .setup-card { background: var(--panel); padding: 30px; border-radius: 12px; border: 1px solid #444c56; width: 420px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        #inputs-container { max-height: 350px; overflow-y: auto; margin: 15px 0; padding-right: 10px; border: 1px solid #30363d; border-radius: 8px; background: #0d1117; }
+        .input-group { margin: 8px; display: flex; align-items: center; gap: 10px; padding: 5px; border-bottom: 1px solid #30363d; }
+        input { flex-grow: 1; padding: 8px; border-radius: 6px; border: 1px solid #444c56; background: #161b22; color: white; }
+        .color-dot { width: 18px; height: 18px; border-radius: 50%; border: 1px solid white; flex-shrink: 0; }
+        
+        .controls { display: flex; gap: 10px; margin-bottom: 15px; }
+        .btn-add { background: #238636; flex: 2; }
+        .btn-remove { background: #da3633; flex: 1; }
+        .btn-start { background: var(--accent); width: 100%; font-size: 1.1rem; margin-top: 10px; }
+        button { padding: 10px; border: none; color: white; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        button:hover { filter: brightness(1.2); }
+
+        #ui { padding: 10px 20px; background: var(--panel); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444c56; z-index: 10; }
+        #game-wrapper { position: relative; display: flex; justify-content: center; flex-grow: 1; overflow: hidden; padding: 10px; }
+        #track-container { position: relative; display: flex; gap: 10px; align-items: flex-start; }
+        canvas { background: #16213e; border-radius: 8px; }
+        #progress-bar { width: 25px; background: rgba(255,255,255,0.05); border-radius: 5px; border: 1px solid #444c56; position: relative; }
+        .marker { position: absolute; width: 16px; height: 16px; border-radius: 50%; left: 4px; border: 1px solid white; transition: top 0.1s linear; }
+
+        #podium {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: var(--panel); padding: 30px; border-radius: 20px; border: 3px solid var(--accent);
+            text-align: center; display: none; z-index: 150; box-shadow: 0 0 80px rgba(0,0,0,1);
+            width: 350px; max-height: 80vh; overflow-y: auto;
+        }
+        .result-item { display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #30363d; font-weight: bold; }
+        .pos-1 { color: #f1c40f; font-size: 1.4rem; border-bottom: 2px solid #f1c40f; }
+        .pos-last { color: #ff4a4a; opacity: 0.8; font-style: italic; }
+    </style>
+</head>
+<body>
+
+<div id="setup-screen">
+    <div class="setup-card">
+        <h2 style="color: white; margin-top:0;">🏁 Nueva Carrera</h2>
+        <div class="controls">
+            <button class="btn-add" onclick="agregarCanica()">+ Añadir</button>
+            <button class="btn-remove" onclick="quitarCanica()">Eliminar</button>
+        </div>
+        <div id="inputs-container"></div>
+        <button class="btn-start" onclick="confirmarNombres()">¡LANZAR!</button>
+        <p id="contador" style="font-size: 0.8rem; margin-top: 10px; opacity: 0.7;">Participantes: 0 / 30</p>
+    </div>
+</div>
+
+<div id="ui">
+    <button onclick="volverAlMenu()" style="background:#444c56">⚙️ MENÚ</button>
+    <div id="marcador">En espera...</div>
+</div>
+
+<div id="game-wrapper">
+    <div id="track-container">
+        <canvas id="canvas"></canvas>
+        <div id="progress-bar"></div>
+    </div>
+
+    <div id="podium">
+        <h2 style="color:white; margin-top:0;">🏁 CLASIFICACIÓN FINAL</h2>
+        <div id="results-list"></div>
+        <button onclick="volverAlMenu()" style="margin-top:20px; background:var(--accent); width:100%">REPETIR / EDITAR</button>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const progBar = document.getElementById('progress-bar');
+    const inputsContainer = document.getElementById('inputs-container');
+    const podiumEl = document.getElementById('podium');
+    const resultsList = document.getElementById('results-list');
+
+    let configCanicas = [];
+    const MAX_C = 30;
+
+    const ANCHO_L = 500; 
+    const ALTO_L = 6000; 
+    const GRAV = 0.045;
+    const REB_C = 0.7;
+    let cameraY = 0;
+    let canicas = [];
+    let obstaculos = [];
+    let ranking = [];
+    let audioCtx = null;
+    let angBumper = 0;
+    let finalizado = false;
+    let animId = null;
+
+    function agregarCanica() {
+        if (configCanicas.length >= MAX_C) return;
+        const id = Date.now() + Math.random(); 
+        const num = configCanicas.length + 1;
+        const color = `hsl(${Math.random() * 360}, 75%, 60%)`;
+        
+        const div = document.createElement('div');
+        div.className = 'input-group';
+        div.id = `group-${id}`;
+        div.innerHTML = `<div class="color-dot" style="background:${color}"></div><input type="text" value="Canica ${num}" id="in-${id}">`;
+        inputsContainer.appendChild(div);
+        configCanicas.push({ color, id });
+        actualizarContador();
+    }
+
+    function quitarCanica() {
+        if (configCanicas.length <= 1) return;
+        const last = configCanicas.pop();
+        document.getElementById(`group-${last.id}`).remove();
+        actualizarContador();
+    }
+
+    function actualizarContador() {
+        document.getElementById('contador').innerText = `Participantes: ${configCanicas.length} / ${MAX_C}`;
+    }
+
+    function volverAlMenu() {
+        cancelAnimationFrame(animId);
+        finalizado = false;
+        podiumEl.style.display = "none";
+        document.getElementById('setup-screen').style.display = "flex";
+        document.getElementById('marcador').innerText = "Modificando equipo...";
+    }
+
+    function playSnd(f, v, d) {
+        if (!audioCtx) return;
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.frequency.setValueAtTime(f, audioCtx.currentTime);
+        g.gain.setValueAtTime(v, audioCtx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + d);
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start(); o.stop(audioCtx.currentTime + d);
+    }
+
+    function resize() {
+        canvas.width = ANCHO_L;
+        canvas.height = window.innerHeight - 120;
+        progBar.style.height = canvas.height + "px";
+    }
+    window.onresize = resize;
+
+    function crearPista() {
+        obstaculos = [];
+        for(let i=0; i<160; i++) {
+            obstaculos.push({ x: 40+Math.random()*(ANCHO_L-80), y: 400+Math.random()*(ALTO_L-800), r: 5, t: 'clavo' });
+        }
+        for(let y=800; y < ALTO_L-1000; y+=700) {
+            obstaculos.push({ x: 100+Math.random()*(ANCHO_L-200), y: y, r: 35, t: 'bumper' });
+            obstaculos.push({ x: 100+Math.random()*(ANCHO_L-200), y: y+350, r: 35, t: 'bumper' });
+        }
+    }
+
+    function confirmarNombres() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const datos = configCanicas.map((c) => ({
+            nombre: document.getElementById(`in-${c.id}`).value || "Sin nombre",
+            color: c.color,
+            uid: c.id
+        }));
+        
+        progBar.innerHTML = "";
+        datos.forEach(d => {
+            const dot = document.createElement('div');
+            dot.id = `m-${d.uid}`;
+            dot.className = 'marker';
+            dot.style.backgroundColor = d.color;
+            progBar.appendChild(dot);
+        });
+
+        document.getElementById('setup-screen').style.display = "none";
+        start(datos);
+    }
+
+    function start(datos) {
+        ranking = [];
+        cameraY = 0;
+        canicas = datos.map((d, i) => ({
+            ...d, x: 100 + (Math.random()*300), y: -30 * i, vx: 0, vy: 0, r: 12, done: false
+        }));
+        crearPista();
+        loop();
+    }
+
+    function colisiones() {
+        for (let i = 0; i < canicas.length; i++) {
+            for (let j = i + 1; j < canicas.length; j++) {
+                const c1 = canicas[i]; const c2 = canicas[j];
+                if (c1.done || c2.done) continue;
+                const dx = c2.x - c1.x; const dy = c2.y - c1.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < c1.r + c2.r) {
+                    const angle = Math.atan2(dy, dx);
+                    const overlap = (c1.r + c2.r) - dist;
+                    c1.x -= Math.cos(angle)*overlap/2; c1.y -= Math.sin(angle)*overlap/2;
+                    c2.x += Math.cos(angle)*overlap/2; c2.y += Math.sin(angle)*overlap/2;
+                    let v1n = c1.vx*Math.cos(angle) + c1.vy*Math.sin(angle);
+                    let v2n = c2.vx*Math.cos(angle) + c2.vy*Math.sin(angle);
+                    const t = v1n; v1n = v2n*REB_C; v2n = t*REB_C;
+                    c1.vx = v1n*Math.cos(angle); c1.vy = v1n*Math.sin(angle);
+                    c2.vx = v2n*Math.cos(angle); c2.vy = v2n*Math.sin(angle);
+                    playSnd(150, 0.05, 0.1);
+                }
+            }
+        }
+    }
+
+    function update() {
+        angBumper += 0.05;
+        colisiones();
+        let maxY = 0;
+        let lider = null;
+
+        canicas.forEach(c => {
+            if(!c.done) {
+                c.vy += GRAV; c.x += c.vx; c.y += c.vy;
+                c.vx *= 0.99;
+                if(c.x < c.r+15 || c.x > ANCHO_L-c.r-15) {
+                    c.vx *= -0.5; c.x = c.x < ANCHO_L/2 ? c.r+15 : ANCHO_L-c.r-15;
+                }
+                obstaculos.forEach(o => {
+                    const dx = c.x-o.x, dy = c.y-o.y, dist = Math.sqrt(dx*dx+dy*dy);
+                    if(dist < c.r+o.r) {
+                        const a = Math.atan2(dy, dx), f = o.t === 'bumper' ? 8 : 3;
+                        c.vx = Math.cos(a)*f; c.vy = Math.sin(a)*f;
+                        c.x = o.x+Math.cos(a)*(c.r+o.r+1); c.y = o.y+Math.sin(a)*(c.r+o.r+1);
+                        playSnd(o.t === 'bumper' ? 200 : 600, 0.05, 0.1);
+                    }
+                });
+                if(c.y > ALTO_L - 80) {
+                    c.y = ALTO_L - 80; c.done = true;
+                    ranking.push(c);
+                    if(ranking.length >= canicas.length - 1 && !finalizado) {
+                        // Identificar la canica que NO ha llegado
+                        const rezagada = canicas.find(can => !can.done);
+                        if(rezagada) ranking.push({...rezagada, esUltimo: true});
+                        finalizado = true;
+                        mostrarPodio();
+                    }
+                }
+            }
+            if(!c.done && c.y > maxY) { maxY = c.y; lider = c; }
+            const m = document.getElementById(`m-${c.uid}`);
+            if(m) m.style.top = ( (c.y/ALTO_L) * (canvas.height - 20) ) + "px";
+        });
+
+        let targetY = (lider ? lider.y : ALTO_L) - canvas.height/2;
+        targetY = Math.max(0, Math.min(targetY, ALTO_L - canvas.height));
+        cameraY += (targetY - cameraY) * 0.05;
+
+        if(lider) document.getElementById('marcador').innerHTML = `LÍDER: <b style="color:${lider.color}">${lider.nombre}</b>`;
+    }
+
+    function draw() {
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        ctx.save(); ctx.translate(0, -cameraY);
+        ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+        for(let i=0; i<ALTO_L; i+=50) { ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(ANCHO_L,i); ctx.stroke(); }
+        ctx.fillStyle = "#238636"; ctx.fillRect(0, ALTO_L-80, ANCHO_L, 80);
+
+        obstaculos.forEach(o => {
+            if (o.t === 'bumper') {
+                ctx.save(); ctx.translate(o.x, o.y);
+                let g = ctx.createRadialGradient(0,0, o.r/2, 0,0, o.r);
+                g.addColorStop(0, '#ff6b81'); g.addColorStop(1, '#9a2d41');
+                ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0,0, o.r, 0, Math.PI*2); ctx.fill();
+                ctx.rotate(angBumper); ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth=2;
+                for(let j=0; j<6; j++) { ctx.rotate(Math.PI/3); ctx.beginPath(); ctx.moveTo(o.r*0.2, 0); ctx.quadraticCurveTo(o.r*0.5, o.r*0.3, o.r*0.8, 0); ctx.stroke(); }
+                ctx.restore();
+            } else {
+                ctx.fillStyle = '#444c56'; ctx.beginPath(); ctx.arc(o.x, o.y, o.r, 0, Math.PI*2); ctx.fill();
+            }
+        });
+
+        canicas.forEach(c => {
+            ctx.save();
+            let g = ctx.createRadialGradient(c.x-c.r/3, c.y-c.r/3, c.r/10, c.x, c.y, c.r);
+            g.addColorStop(0, 'white'); g.addColorStop(0.2, c.color); g.addColorStop(1, 'black');
+            ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = "white"; ctx.font = "bold 11px Arial"; ctx.textAlign = "center";
+            ctx.fillText(c.nombre, c.x, c.y-16);
+            ctx.restore();
+        });
+        ctx.restore();
+    }
+
+    function mostrarPodio() {
+        resultsList.innerHTML = "";
+        ranking.forEach((c, i) => {
+            const item = document.createElement('div');
+            const esUltimo = c.esUltimo;
+            item.className = `result-item pos-${esUltimo ? 'last' : (i+1)}`;
+            item.innerHTML = `<span>${esUltimo ? 'ÚLTIMO' : (i+1 + 'º')} ${c.nombre}</span> <span style="color:${c.color}">●</span>`;
+            resultsList.appendChild(item);
+        });
+        podiumEl.style.display = "block";
+        document.getElementById('marcador').innerHTML = "🏁 RESULTADOS LISTOS";
+    }
+
+    function loop() { 
+        if(!finalizado) {
+            update(); draw(); 
+            animId = requestAnimationFrame(loop); 
+        } else {
+            draw(); // Dibujo final estático
+        }
+    }
+
+    agregarCanica();
+    agregarCanica();
+    resize();
+</script>
+</body>
+</html>
